@@ -1,0 +1,85 @@
+[metadata]
+creation_date = "2026/11/19"
+maturity = "development"
+updated_date = "2026/11/19"
+det_id = "DET-05"
+telemetry = ["dom_security"]
+min_stack_version = "9.2.0"
+
+[rule]
+author = ["Bhavya2-4"]
+description = """
+Identifies insertion of an iframe that is not visible to the user (zero size, off-screen, or hidden by style)
+whose origin is not on the approved-frame list. OPTIMJACK delivered its iOS exploit chain this way. Payment
+providers also use hidden iframes legitimately (for example Stripe's controller frame), which is why the
+approval check matters more than the visibility check.
+"""
+false_positives = [
+"""
+Hidden iframes from approved payment, consent, fraud-prevention and analytics vendors. They are expected and are
+marked dom.iframe.origin_approved = true at ingest. Unapproved first-party hidden frames should be added to the
+list, not excluded from the rule.
+""",
+]
+from = "now-9m"
+interval = "5m"
+index = ["logs-browser.dom-*"]
+language = "kuery"
+license = "Elastic License v2"
+name = "Hidden Iframe Inserted From Unapproved Origin"
+note = """
+## Triage
+
+1. `dom.iframe.src` and `dom.iframe.src_domain`: look up the origin. Young domains on cheap TLDs fit the OPTIMJACK pattern.
+2. `browser.initiator.url`: which script inserted it?
+3. `user_agent.original`: if hits cluster on iOS / iPadOS, treat as attempted device exploitation and check
+   corporate MDM for devices below the patched OS version.
+4. Check for page reloads every ~60 seconds on the same sessions (reported OPTIMJACK retry symptom).
+"""
+references = [
+"https://www.zscaler.com/blogs/security-research/attackers-exploit-optimizely-flaw-inject-malicious-javascript",
+"https://attack.mitre.org/techniques/T1189/",
+]
+risk_score = 73
+rule_id = "5c8cea99-e3d6-41ce-8174-8978b8d3042d"
+setup = """
+Requires the DOM integrity monitor (first-party script loaded before any third-party tag) sending events to
+logs-browser.dom-*. dom.iframe.visible and dom.iframe.origin_approved are computed in the browser and at
+ingest respectively. Network logs alone cannot tell a hidden iframe from a visible one.
+"""
+severity = "high"
+tags = [
+"Use Case: Threat Detection",
+"Use Case: Web Application Security",
+"Tactic: Initial Access",
+"Data Source: DOM Security Telemetry",
+"Rule Type: Custom Query",
+"Resources: Investigation Guide",
+]
+type = "query"
+
+query = '''
+event.dataset:"browser.dom" and event.action:"iframe_inserted" and
+dom.iframe.visible:false and dom.iframe.origin_approved:false
+'''
+
+[rule.alert_suppression]
+group_by = ["dom.iframe.src_domain"]
+missing_fields_strategy = "suppress"
+
+[rule.alert_suppression.duration]
+unit = "h"
+value = 1
+
+[[rule.threat]]
+framework = "MITRE ATT&CK"
+
+[[rule.threat.technique]]
+id = "T1189"
+name = "Drive-by Compromise"
+reference = "https://attack.mitre.org/techniques/T1189/"
+
+[rule.threat.tactic]
+id = "TA0001"
+name = "Initial Access"
+reference = "https://attack.mitre.org/tactics/TA0001/"

@@ -1,0 +1,90 @@
+[metadata]
+creation_date = "2026/11/19"
+maturity = "development"
+updated_date = "2026/11/19"
+det_id = "DET-04"
+telemetry = ["proxy"]
+min_stack_version = "9.2.0"
+
+[rule]
+author = ["Bhavya2-4"]
+description = """
+Identifies POST requests (which include navigator.sendBeacon) from corporate browsers to destinations outside
+the approved-destination list, where the HTTP referrer is one of the organisation's own public sites. This
+watches the slice of visitors you can see: employees browsing your own site. It complements the CSP rule and
+works when the CSP rule can't (no policy, or no reporting endpoint).
+"""
+false_positives = [
+"""
+Legitimate third parties loaded on the site that the allowlist hasn't caught up with. Most analytics vendors
+are already approved. A burst to an approved analytics domain doesn't reach this rule at all, by design.
+""",
+]
+from = "now-20m"
+interval = "15m"
+language = "esql"
+license = "Elastic License v2"
+name = "Corporate Browser POST From Own Site to Unapproved Destination"
+note = """
+## Triage
+
+1. Who: `hosts` and `users`. If more than one host shows the same destination, the cause is on the site, not the endpoint.
+2. What page: `referrers`. A checkout or login referrer raises priority.
+3. TLS inspection is often unavailable. Do not expect a request body. Destination, method, size and timing are usually all you have.
+4. Check the same domain in DNS logs for first-seen time across the whole estate.
+"""
+references = [
+"https://attack.mitre.org/techniques/T1041/",
+]
+risk_score = 47
+rule_id = "7f6330bd-dd12-4082-8079-49844e69a54a"
+setup = """
+Requires web proxy / secure web gateway logs in logs-network.proxy-* with ECS http.request.method,
+http.request.referrer, destination.domain, host.name and user.name, plus the custom field
+proxy.referrer_domain (extracted at ingest from http.request.referrer). Edit the site list for your domains.
+"""
+severity = "medium"
+tags = [
+"Use Case: Threat Detection",
+"Use Case: Data Exfiltration Detection",
+"Tactic: Exfiltration",
+"Data Source: Web Proxy",
+"Rule Type: ES|QL",
+"Resources: Investigation Guide",
+]
+type = "esql"
+
+query = '''
+from logs-network.proxy-*
+| where http.request.method == "POST"
+    and proxy.referrer_domain in ("shop.acme-retail.example", "www.acme-retail.example")
+| lookup join lkp-approved-destinations on destination.domain
+| where approved_destination.owner is null
+| stats requests = count(*),
+        hosts = count_distinct(host.name),
+        users = count_distinct(user.name),
+        referrers = values(http.request.referrer),
+        first_seen = min(@timestamp)
+    by destination.domain
+'''
+
+[rule.alert_suppression]
+group_by = ["destination.domain"]
+missing_fields_strategy = "suppress"
+
+[rule.alert_suppression.duration]
+unit = "h"
+value = 6
+
+[[rule.threat]]
+framework = "MITRE ATT&CK"
+
+[[rule.threat.technique]]
+id = "T1041"
+name = "Exfiltration Over C2 Channel"
+reference = "https://attack.mitre.org/techniques/T1041/"
+
+[rule.threat.tactic]
+id = "TA0010"
+name = "Exfiltration"
+reference = "https://attack.mitre.org/tactics/TA0010/"

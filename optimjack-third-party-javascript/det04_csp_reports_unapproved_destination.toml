@@ -1,0 +1,105 @@
+[metadata]
+creation_date = "2026/11/19"
+maturity = "development"
+updated_date = "2026/11/19"
+det_id = "DET-04"
+telemetry = ["csp_reports"]
+min_stack_version = "9.2.0"
+
+[rule]
+author = ["Bhavya2-4"]
+description = """
+Aggregates CSP violation reports by the destination the browser tried to reach, removes destinations in the
+approved-destination lookup, and alerts when an unapproved destination is reported from at least two distinct
+pages. CSP reports are the only customer-owned telemetry that sees visitors' browsers, and a report is sent
+even when the request is blocked, so this fires whether or not the policy stopped the exfiltration.
+"""
+false_positives = [
+"""
+Browser extensions injecting their own requests, and new legitimate vendors added by a team that didn't update
+the allowlist. The ingest pipeline drops reports whose source file uses an extension scheme. The two-page
+threshold removes most single-visitor extension noise.
+""",
+]
+from = "now-20m"
+interval = "15m"
+language = "esql"
+license = "Elastic License v2"
+name = "Browser Requests to Unapproved Destination Reported by CSP"
+note = """
+## Triage
+
+1. Look up `destination.domain`: registration date, hosting, certificate transparency. OPTIMJACK's 1688360[.]cc
+   had been registered for hours, not days.
+2. `directives` tells you what was attempted. `connect-src` means fetch, XHR or sendBeacon (data leaving).
+   `script-src-elem` means code arriving. `frame-src` means an iframe.
+3. `source_files` shows which script made the request. If it's a vendor snippet, run DET-01 for that URL.
+4. `pages` and `reports` show reach. Every page loading the snippet suggests injection at the vendor.
+
+## Remember
+
+A report means the browser tried. If your policy is Report-Only on these pages, the request was **not** blocked.
+"""
+references = [
+"https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/connect-src",
+"https://attack.mitre.org/techniques/T1041/",
+]
+risk_score = 73
+rule_id = "5c895b72-b542-4295-88bb-b1f0971b203d"
+setup = """
+Requires CSP reports in logs-csp.report-* (pipeline extracts destination.domain from blocked-uri with the
+uri_parts processor) and the lookup index lkp-approved-destinations keyed on destination.domain.
+"""
+severity = "high"
+tags = [
+"Use Case: Threat Detection",
+"Use Case: Data Exfiltration Detection",
+"Tactic: Exfiltration",
+"Data Source: CSP Reports",
+"Rule Type: ES|QL",
+"Resources: Investigation Guide",
+]
+type = "esql"
+
+query = '''
+from logs-csp.report-*
+| where csp.effective_directive in ("connect-src", "img-src", "script-src-elem", "frame-src", "form-action")
+    and destination.domain is not null
+| lookup join lkp-approved-destinations on destination.domain
+| where approved_destination.owner is null
+| stats reports = count(*),
+        pages = count_distinct(csp.document_uri),
+        directives = values(csp.effective_directive),
+        source_files = values(csp.source_file),
+        dispositions = values(csp.disposition),
+        first_seen = min(@timestamp),
+        last_seen = max(@timestamp)
+    by destination.domain
+| where reports >= 3 and pages >= 2
+'''
+
+[rule.alert_suppression]
+group_by = ["destination.domain"]
+missing_fields_strategy = "suppress"
+
+[rule.alert_suppression.duration]
+unit = "h"
+value = 6
+
+[[rule.threat]]
+framework = "MITRE ATT&CK"
+
+[[rule.threat.technique]]
+id = "T1041"
+name = "Exfiltration Over C2 Channel"
+reference = "https://attack.mitre.org/techniques/T1041/"
+
+[[rule.threat.technique]]
+id = "T1567"
+name = "Exfiltration Over Web Service"
+reference = "https://attack.mitre.org/techniques/T1567/"
+
+[rule.threat.tactic]
+id = "TA0010"
+name = "Exfiltration"
+reference = "https://attack.mitre.org/tactics/TA0010/"

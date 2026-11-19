@@ -1,0 +1,97 @@
+[metadata]
+creation_date = "2026/11/19"
+maturity = "development"
+updated_date = "2026/11/19"
+det_id = "DET-03"
+telemetry = ["browser_runtime"]
+min_stack_version = "9.2.0"
+
+[rule]
+author = ["Bhavya2-4"]
+description = """
+Identifies the embedded-payload fallback pattern: a script element created by a page script fails to load
+from a non-approved host, and within 30 seconds the same initiating script evaluates a large string.
+This is OPTIMJACK loader variant 3 (inline copy of the payload run with eval when the external host is
+blocked). Neither eval nor a failed load is suspicious alone. The sequence from the same initiator is.
+"""
+false_positives = [
+"""
+Tag managers that retry a blocked vendor tag and then fall back to an inline copy of the same vendor's code.
+If this is a known, accepted behaviour, approve the failed host in the destination allowlist (which sets
+browser.script.domain_approved = true at ingest) instead of excluding the initiator.
+""",
+]
+from = "now-9m"
+interval = "5m"
+index = ["logs-browser.runtime-*"]
+language = "eql"
+license = "Elastic License v2"
+name = "Large Eval After Blocked Script Load From Same Initiator"
+note = """
+## Triage
+
+1. `browser.initiator.url` is the script that did both things. In OPTIMJACK this was the vendor snippet itself.
+2. The first event's `browser.script.src` is the host it tried to reach. Look it up.
+3. `browser.eval.sample` (first 40 chars) and `browser.eval.sha256` identify the evaluated code. Search for the same sha256 on other sessions and pages.
+4. Pull the current snippet body from the script archive (DET-01) and confirm the inline payload is present.
+
+## Why this matters
+
+When this fires, a CSP or DNS block *worked* against the external stage and the attacker's fallback ran anyway.
+Your network controls did their job and the visitor was still exposed. Removing 'unsafe-eval' on the affected
+pages is the fix.
+"""
+references = [
+"https://blog.report-uri.com/worlds-largest-brands-infected-with-malware-via-optimizely/",
+"https://www.w3.org/TR/CSP3/",
+]
+risk_score = 73
+rule_id = "4cf61d27-2233-416a-baea-50bae945bf4e"
+setup = """
+Requires first-party browser runtime instrumentation (see detections/elastic/README.md, "browser runtime
+telemetry") that records script load failures and eval/Function calls with the initiating script URL taken
+from the call stack. browser.script.domain_approved is set at ingest by an enrich processor against the
+destination allowlist. No EDR or OS log can see inside the page's JavaScript.
+"""
+severity = "high"
+tags = [
+"Use Case: Threat Detection",
+"Use Case: Web Application Security",
+"Tactic: Execution",
+"Data Source: Browser Runtime Telemetry",
+"Rule Type: EQL",
+"Resources: Investigation Guide",
+]
+type = "eql"
+
+query = '''
+sequence by browser.session_id, browser.initiator.url with maxspan=30s
+  [any where event.action == "script_load_failed" and browser.script.domain_approved == false]
+  [any where event.action == "dynamic_code_eval" and browser.eval.length >= 2000]
+'''
+
+[rule.alert_suppression]
+group_by = ["browser.initiator.url"]
+missing_fields_strategy = "suppress"
+
+[rule.alert_suppression.duration]
+unit = "h"
+value = 1
+
+[[rule.threat]]
+framework = "MITRE ATT&CK"
+
+[[rule.threat.technique]]
+id = "T1059"
+name = "Command and Scripting Interpreter"
+reference = "https://attack.mitre.org/techniques/T1059/"
+
+[[rule.threat.technique.subtechnique]]
+id = "T1059.007"
+name = "JavaScript"
+reference = "https://attack.mitre.org/techniques/T1059/007/"
+
+[rule.threat.tactic]
+id = "TA0002"
+name = "Execution"
+reference = "https://attack.mitre.org/tactics/TA0002/"

@@ -1,0 +1,127 @@
+[metadata]
+creation_date = "2026/11/19"
+maturity = "development"
+updated_date = "2026/11/19"
+det_id = "DET-05"
+telemetry = ["dom_security"]
+min_stack_version = "9.2.0"
+
+[rule]
+author = ["Bhavya2-4"]
+description = """
+Identifies a non-first-party page script that registers a copy, paste, input or submit listener and then
+programmatically changes the value of an element tagged as a wallet address or payment input, within five
+minutes in the same browser session. This is the crypto-clipper and form-tampering behaviour seen in
+OPTIMJACK. It is the one payload behaviour that blocking exfiltration does not stop.
+"""
+false_positives = [
+"""
+Third-party checkout widgets that format card numbers, and password managers. Formatting widgets should
+be loaded from approved origins and marked first-party-equivalent in the monitor configuration. Extensions are
+filtered by browser.initiator.type, because their stack frames use an extension scheme.
+""",
+]
+from = "now-9m"
+interval = "5m"
+index = ["logs-browser.dom-*"]
+language = "eql"
+license = "Elastic License v2"
+name = "Third-Party Script Changes Wallet or Payment Field Value"
+note = """
+## Triage
+
+1. `dom.element.role` tells you what was changed. `wallet_address` is the more urgent case, because crypto transfers are irreversible.
+2. Compare `dom.value.expected_sha256` with `dom.value.observed_sha256` (hashes, never raw values). A mismatch
+   on a server-rendered deposit address is close to conclusive.
+3. `browser.initiator.url` is the script responsible. Run DET-01 on it immediately.
+4. Scope: count distinct `browser.session_id` with the same initiator over the past 24h to size exposure.
+
+## Response
+
+Remove the initiating script from deposit and payment pages first, then investigate. Notify fraud and payments
+teams with the time window.
+"""
+references = [
+"https://blog.report-uri.com/worlds-largest-brands-infected-with-malware-via-optimizely/",
+"https://attack.mitre.org/techniques/T1565/002/",
+"https://attack.mitre.org/techniques/T1115/",
+]
+risk_score = 91
+rule_id = "4e4fb565-f8e6-4b8a-9152-8a704ba08253"
+setup = """
+Requires the DOM integrity monitor to (a) wrap addEventListener and value setters on elements marked with
+data-sensitive-role, (b) attribute calls to a script URL using the call stack, and (c) hash expected and observed
+values in the browser. Raw card numbers or addresses must never be sent as telemetry.
+"""
+severity = "critical"
+tags = [
+"Use Case: Threat Detection",
+"Use Case: Web Application Security",
+"Use Case: Fraud",
+"Tactic: Collection",
+"Tactic: Impact",
+"Data Source: DOM Security Telemetry",
+"Rule Type: EQL",
+"Resources: Investigation Guide",
+]
+type = "eql"
+
+query = '''
+sequence by browser.session_id, browser.initiator.url with maxspan=5m
+  [any where event.action == "listener_registered"
+     and dom.listener.type in ("copy", "paste", "input", "submit")
+     and browser.initiator.first_party == false and browser.initiator.type == "page_script"]
+  [any where event.action == "element_value_changed"
+     and dom.element.role in ("wallet_address", "payment_input")
+     and dom.mutation.programmatic == true
+     and browser.initiator.first_party == false]
+'''
+
+[rule.alert_suppression]
+group_by = ["browser.initiator.url"]
+missing_fields_strategy = "suppress"
+
+[rule.alert_suppression.duration]
+unit = "h"
+value = 1
+
+[[rule.threat]]
+framework = "MITRE ATT&CK"
+
+[[rule.threat.technique]]
+id = "T1115"
+name = "Clipboard Data"
+reference = "https://attack.mitre.org/techniques/T1115/"
+
+[[rule.threat.technique]]
+id = "T1056"
+name = "Input Capture"
+reference = "https://attack.mitre.org/techniques/T1056/"
+
+[[rule.threat.technique.subtechnique]]
+id = "T1056.003"
+name = "Web Portal Capture"
+reference = "https://attack.mitre.org/techniques/T1056/003/"
+
+[rule.threat.tactic]
+id = "TA0009"
+name = "Collection"
+reference = "https://attack.mitre.org/tactics/TA0009/"
+
+[[rule.threat]]
+framework = "MITRE ATT&CK"
+
+[[rule.threat.technique]]
+id = "T1565"
+name = "Data Manipulation"
+reference = "https://attack.mitre.org/techniques/T1565/"
+
+[[rule.threat.technique.subtechnique]]
+id = "T1565.002"
+name = "Transmitted Data Manipulation"
+reference = "https://attack.mitre.org/techniques/T1565/002/"
+
+[rule.threat.tactic]
+id = "TA0040"
+name = "Impact"
+reference = "https://attack.mitre.org/tactics/TA0040/"

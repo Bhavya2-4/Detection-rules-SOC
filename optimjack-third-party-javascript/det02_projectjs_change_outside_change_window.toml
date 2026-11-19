@@ -1,0 +1,101 @@
+[metadata]
+creation_date = "2026/11/19"
+maturity = "development"
+updated_date = "2026/11/19"
+det_id = "DET-02"
+telemetry = ["vendor_audit", "change_calendar"]
+min_stack_version = "9.2.0"
+
+[rule]
+author = ["Bhavya2-4"]
+description = """
+Identifies any change to a vendor project's custom JavaScript (UI or API token) that does not fall inside an
+approved change window for that project. Approved windows come from the change-management system and are
+loaded into the lookup index lkp-change-windows. The rule also scores what the change introduced, so an
+unscheduled one-line fix ranks below an unscheduled change that adds an external domain and eval.
+"""
+false_positives = [
+"""
+Emergency fixes made without a ticket, and change windows that were approved but not exported to the lookup.
+Both are process failures worth fixing. Treat low content-risk hits as a governance finding, not an incident.
+""",
+]
+from = "now-70m"
+interval = "60m"
+language = "esql"
+license = "Elastic License v2"
+name = "Vendor Project JavaScript Changed Outside Approved Change Window"
+note = """
+## Triage
+
+1. Look at `det.content_risk`. A score of 0 usually means a process gap. A score of 2 or more means read the diff now.
+2. `added_domains` lists external hosts the change introduced. Look each one up: registrar, creation date, hosting.
+3. For `saas.auth_method == "api_token"`, identify the token owner and check whether that automation should be writing projectJS at all.
+4. Correlate with DET-02 (no IdP session) and DET-01 (snippet hash drift) for the same project.
+"""
+references = [
+"https://pages.optimizely.com/rs/947-RKE-048/images/Security%20Incident%20Report%20-%20Optimizely%20Web%20Experimentation%20-%20Nov%2017%202026.pdf",
+]
+risk_score = 47
+rule_id = "1d4a891d-7c58-4ce3-870e-8bd489faa0f5"
+setup = """
+Requires the vendor audit log (logs-saas_audit.<vendor>-*) with saas.project_id and the custom saas.change.*
+diff fields, plus the lookup index lkp-change-windows (index.mode: lookup) keyed on saas.project_id with
+change_window.start / change_window.end. A project with several windows produces several joined rows; the
+STATS step keeps the change only if none of them covers the timestamp.
+"""
+severity = "medium"
+tags = [
+"Use Case: Threat Detection",
+"Use Case: Configuration Audit",
+"Use Case: Supply Chain",
+"Tactic: Initial Access",
+"Data Source: SaaS Audit Logs",
+"Rule Type: ES|QL",
+"Resources: Investigation Guide",
+]
+type = "esql"
+
+query = '''
+from logs-saas_audit.*-*
+| where event.action == "project_javascript.update"
+| lookup join lkp-change-windows on saas.project_id
+| eval in_window = case(
+    change_window.start is not null and @timestamp >= change_window.start and @timestamp <= change_window.end, 1, 0)
+| stats approved = max(in_window),
+        added_domains = values(saas.change.added_domains),
+        added_tokens = values(saas.change.added_tokens)
+    by event.id, @timestamp, user.email, saas.vendor, saas.project_id, saas.auth_method, source.ip,
+       saas.change.added_domain_count, saas.change.added_token_count, saas.change.replaced_existing
+| where approved == 0
+| eval det.content_risk =
+    case(saas.change.added_domain_count > 0, 2, 0)
+  + case(saas.change.added_token_count > 0, 1, 0)
+  + case(saas.change.replaced_existing == true, 1, 0)
+'''
+
+[rule.alert_suppression]
+group_by = ["saas.project_id", "user.email"]
+missing_fields_strategy = "suppress"
+
+[rule.alert_suppression.duration]
+unit = "h"
+value = 6
+
+[[rule.threat]]
+framework = "MITRE ATT&CK"
+
+[[rule.threat.technique]]
+id = "T1195"
+name = "Supply Chain Compromise"
+reference = "https://attack.mitre.org/techniques/T1195/"
+
+[[rule.threat.technique.subtechnique]]
+id = "T1195.002"
+name = "Compromise Software Supply Chain"
+reference = "https://attack.mitre.org/techniques/T1195/002/"
+
+[rule.threat.tactic]
+id = "TA0001"
+name = "Initial Access"
+reference = "https://attack.mitre.org/tactics/TA0001/"

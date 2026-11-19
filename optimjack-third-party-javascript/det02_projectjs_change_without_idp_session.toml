@@ -1,0 +1,118 @@
+[metadata]
+creation_date = "2026/11/19"
+maturity = "development"
+updated_date = "2026/11/19"
+det_id = "DET-02"
+telemetry = ["vendor_audit", "idp_signin"]
+min_stack_version = "9.2.0"
+
+[rule]
+author = ["Bhavya2-4"]
+description = """
+Identifies a user who edited a vendor project's custom JavaScript through an interactive session, but who has
+no successful sign-in to that vendor application at the corporate identity provider in the same window.
+In OPTIMJACK the attacker acted as real administrators through a signup-flow flaw that bypassed
+authentication entirely, so the customer's IdP never saw a login. This rule turns that absence into a signal.
+"""
+false_positives = [
+"""
+IdP sessions that outlive the rule lookback (a user who signed in yesterday and is still in a valid vendor
+session). Set the lookback to at least the vendor's maximum session lifetime. Users who still have a local
+(non-SSO) vendor login will also match: that is a finding in itself. Remove local logins.
+""",
+]
+from = "now-24h"
+interval = "60m"
+language = "esql"
+license = "Elastic License v2"
+name = "Vendor Project JavaScript Changed With No Corporate IdP Sign-In"
+note = """
+## Triage
+
+1. `user_key` is the identity the vendor attributed the change to. Ask that person directly whether they made it.
+2. Compare `source_ips` with the user's usual egress. OPTIMJACK changes came from commercial VPN ranges.
+3. Pull the diff for each project in `projects` from the vendor's change history.
+4. Check DET-01 for snippet hash changes on the same projects shortly after `first_change`.
+
+## Escalate immediately if
+
+- the user denies the change, or
+- the diff adds an external domain, `atob`, `eval` or a dynamic script element.
+
+## Response
+
+Revert projectJS from your own copy (not only the vendor's history), remove the snippet from sensitive pages,
+open a vendor security ticket, and preserve the audit export. See docs/soc-investigation-playbook.md.
+"""
+references = [
+"https://status.optimizely.com/incidents/ftw0fh9wx43z",
+"https://attack.mitre.org/techniques/T1190/",
+]
+risk_score = 73
+rule_id = "20dd0ab7-9453-4743-8b8c-4c2689c5ef1c"
+setup = """
+Requires (1) the vendor's administrative audit log ingested to logs-saas_audit.<vendor>-* with ECS user.email,
+source.ip and the custom saas.* fields, and (2) corporate IdP sign-in events to logs-idp.signin-* with
+event.category "authentication" and the custom field idp.application.name. If the vendor does not expose an
+audit API to customers, this rule cannot run. Use DET-01 as the compensating control.
+"""
+severity = "high"
+tags = [
+"Use Case: Threat Detection",
+"Use Case: Identity and Access Audit",
+"Use Case: Supply Chain",
+"Tactic: Initial Access",
+"Data Source: SaaS Audit Logs",
+"Data Source: Identity Provider",
+"Rule Type: ES|QL",
+"Resources: Investigation Guide",
+]
+type = "esql"
+
+query = '''
+from logs-saas_audit.*-*, logs-idp.signin-*
+| where (event.action == "project_javascript.update" and saas.auth_method == "session")
+     or (event.category == "authentication" and event.outcome == "success" and idp.application.name == "optimizely")
+| eval user_key = to_lower(user.email)
+| eval is_change = case(event.action == "project_javascript.update", 1, 0),
+       is_sso = case(event.category == "authentication", 1, 0)
+| stats js_changes = sum(is_change),
+        sso_logins = sum(is_sso),
+        projects = values(saas.project_id),
+        source_ips = values(source.ip),
+        first_change = min(case(is_change == 1, @timestamp, null)),
+        last_change = max(case(is_change == 1, @timestamp, null))
+    by user_key
+| where js_changes > 0 and sso_logins == 0
+'''
+
+[rule.alert_suppression]
+group_by = ["user_key"]
+missing_fields_strategy = "suppress"
+
+[rule.alert_suppression.duration]
+unit = "h"
+value = 12
+
+[[rule.threat]]
+framework = "MITRE ATT&CK"
+
+[[rule.threat.technique]]
+id = "T1190"
+name = "Exploit Public-Facing Application"
+reference = "https://attack.mitre.org/techniques/T1190/"
+
+[[rule.threat.technique]]
+id = "T1195"
+name = "Supply Chain Compromise"
+reference = "https://attack.mitre.org/techniques/T1195/"
+
+[[rule.threat.technique.subtechnique]]
+id = "T1195.002"
+name = "Compromise Software Supply Chain"
+reference = "https://attack.mitre.org/techniques/T1195/002/"
+
+[rule.threat.tactic]
+id = "TA0001"
+name = "Initial Access"
+reference = "https://attack.mitre.org/tactics/TA0001/"

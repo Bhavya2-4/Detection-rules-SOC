@@ -1,0 +1,104 @@
+[metadata]
+creation_date = "2026/11/19"
+maturity = "development"
+updated_date = "2026/11/19"
+det_id = "DET-03"
+telemetry = ["csp_reports"]
+min_stack_version = "9.2.0"
+
+[rule]
+author = ["Bhavya2-4"]
+description = """
+Uses a CSP Report-Only policy that omits 'unsafe-eval' (deployed alongside the enforced policy) as an eval
+sensor. Every eval on a sensitive page produces a report with blockedURL "eval", the source file, and, with
+'report-sample', the first 40 characters of the evaluated string. This new terms rule alerts when a
+(source file, sample) pair appears that was not seen in the previous 14 days. Vendor scripts that use eval
+legitimately produce a stable set of samples, and an injected payload doesn't share their prefix.
+"""
+false_positives = [
+"""
+A vendor or marketing team publishing a new experiment changes what the snippet evaluates. Expect bursts after
+experiment launches and correlate with the vendor audit log. A new sample from the same source file within
+minutes of an approved change is low priority.
+""",
+]
+from = "now-9m"
+interval = "5m"
+index = ["logs-csp.report-*"]
+language = "kuery"
+license = "Elastic License v2"
+name = "New Eval Sample From Third-Party Script on Sensitive Page"
+note = """
+## Triage
+
+1. Read `csp.sample`. Base64-looking text, a self-invoking function, or minified code that doesn't resemble the
+   vendor's experiment code is a strong signal.
+2. Check `csp.source_file`. Is it the vendor snippet URL you expect for this page?
+3. Count distinct `csp.document_uri` values for the same sample over the last hour. A payload shows up on every
+   page that loads the snippet; a new experiment usually targets a few URLs.
+4. Pivot to DET-03 (EQL) and DET-01 on the same source file.
+
+## Requirements reminder
+
+This only works if the report-only policy is served on the sensitive pages and includes 'report-sample'.
+"""
+references = [
+"https://www.w3.org/TR/CSP3/",
+"https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy-Report-Only",
+]
+risk_score = 47
+rule_id = "2fac7191-121a-4bed-9bba-a8d6e73c6d2a"
+setup = """
+Requires CSP violation reports (report-to / Reporting API) ingested to logs-csp.report-* through the ingest
+pipeline in detections/elastic/pipelines/csp-report.json, which flattens the report body into csp.* and sets
+csp.page_sensitivity from the document path.
+"""
+severity = "medium"
+tags = [
+"Use Case: Threat Detection",
+"Use Case: Web Application Security",
+"Tactic: Execution",
+"Data Source: CSP Reports",
+"Rule Type: New Terms",
+"Resources: Investigation Guide",
+]
+type = "new_terms"
+
+query = '''
+event.dataset:"csp.report" and csp.blocked_uri:"eval" and csp.disposition:"report" and
+csp.page_sensitivity:("payment" or "auth" or "wallet")
+'''
+
+[rule.new_terms]
+field = "new_terms_fields"
+value = ["csp.source_file", "csp.sample"]
+
+[[rule.new_terms.history_window_start]]
+field = "history_window_start"
+value = "now-14d"
+
+[rule.alert_suppression]
+group_by = ["csp.source_file", "csp.sample"]
+missing_fields_strategy = "suppress"
+
+[rule.alert_suppression.duration]
+unit = "h"
+value = 1
+
+[[rule.threat]]
+framework = "MITRE ATT&CK"
+
+[[rule.threat.technique]]
+id = "T1059"
+name = "Command and Scripting Interpreter"
+reference = "https://attack.mitre.org/techniques/T1059/"
+
+[[rule.threat.technique.subtechnique]]
+id = "T1059.007"
+name = "JavaScript"
+reference = "https://attack.mitre.org/techniques/T1059/007/"
+
+[rule.threat.tactic]
+id = "TA0002"
+name = "Execution"
+reference = "https://attack.mitre.org/tactics/TA0002/"

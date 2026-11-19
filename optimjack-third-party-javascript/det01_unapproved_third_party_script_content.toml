@@ -1,0 +1,110 @@
+[metadata]
+creation_date = "2026/11/19"
+maturity = "development"
+updated_date = "2026/11/19"
+det_id = "DET-01"
+telemetry = ["script_inventory"]
+min_stack_version = "9.2.0"
+
+[rule]
+author = ["Bhavya2-4"]
+description = """
+Identifies a change in the bytes served for a monitored third-party script (as observed by an external
+script-inventory collector) where the new SHA-256 is not in the approved-hash lookup. A content-risk score
+is computed from what the change introduced: new external domains, new decode/eval tokens, and whether the
+script runs on a sensitive page. A hash change alone is not malicious. This rule exists to force every
+unapproved change through a human or automated approval decision.
+"""
+false_positives = [
+"""
+Legitimate vendor releases and marketing edits to experimentation snippets change the hash. These are expected
+to be auto-approved by the approval job (see DET-01 spec) before this rule runs. Anything reaching this rule
+either failed auto-approval or arrived without a correlated change record.
+""",
+]
+from = "now-70m"
+interval = "60m"
+language = "esql"
+license = "Elastic License v2"
+name = "Third-Party Script Content Changed Without Approval"
+note = """
+## Triage
+
+1. Open `scriptinv.page_url` and `url.full`. Is this a vendor you still use?
+2. Compare `file.hash.sha256` with `scriptinv.previous_hash`. Pull both bodies from the script archive and diff them.
+3. `scriptinv.new_external_domains` is the most important field. A new domain in an experimentation snippet is rare.
+4. `scriptinv.added_tokens` lists newly introduced `atob`, `eval`, `Function`, `createElement('script')`, etc.
+5. Check DET-02 alerts and the vendor audit log for a configuration change in the 60 minutes before `@timestamp`.
+
+## Escalate immediately if
+
+- `det.content_risk >= 4`, or
+- the new domain is not owned by the vendor (check WHOIS creation date; OPTIMJACK domains were hours old), or
+- `scriptinv.page_sensitivity` is `payment`, `auth` or `wallet`.
+
+## Response
+
+Follow docs/soc-investigation-playbook.md, section "Containment": disable the integration on sensitive pages first.
+"""
+references = [
+"https://blog.report-uri.com/worlds-largest-brands-infected-with-malware-via-optimizely/",
+"https://attack.mitre.org/techniques/T1195/002/",
+]
+risk_score = 47
+rule_id = "3e2b91f6-d0ff-4aeb-a386-a91d5b7bd2a2"
+setup = """
+Requires the script-inventory collector (tools/script_inventory.py or equivalent) writing ECS events to
+logs-scriptinv.observation-* and the lookup index lkp-approved-script-hashes (index.mode: lookup).
+Standard endpoint, Windows or EDR telemetry cannot produce this data.
+"""
+severity = "medium"
+tags = [
+"Use Case: Threat Detection",
+"Use Case: Supply Chain",
+"Tactic: Initial Access",
+"Data Source: Script Inventory",
+"Rule Type: ES|QL",
+"Resources: Investigation Guide",
+]
+timestamp_override = "event.ingested"
+type = "esql"
+
+query = '''
+from logs-scriptinv.observation-* metadata _id, _index, _version
+| where event.action == "script_observed" and scriptinv.hash_changed == true
+| lookup join lkp-approved-script-hashes on file.hash.sha256
+| where approval.ticket_id is null
+| eval det.content_risk =
+    case(scriptinv.new_external_domain_count > 0, 2, 0)
+  + case(scriptinv.added_token_count > 0, 1, 0)
+  + case(scriptinv.page_sensitivity in ("payment", "auth", "wallet"), 2, 0)
+| keep @timestamp, _id, _index, _version, url.full, url.domain, file.hash.sha256,
+       scriptinv.previous_hash, scriptinv.vendor, scriptinv.page_url, scriptinv.page_sensitivity,
+       scriptinv.new_external_domains, scriptinv.added_tokens, scriptinv.size_delta_pct, det.content_risk
+'''
+
+[rule.alert_suppression]
+group_by = ["url.full", "file.hash.sha256"]
+missing_fields_strategy = "suppress"
+
+[rule.alert_suppression.duration]
+unit = "h"
+value = 24
+
+[[rule.threat]]
+framework = "MITRE ATT&CK"
+
+[[rule.threat.technique]]
+id = "T1195"
+name = "Supply Chain Compromise"
+reference = "https://attack.mitre.org/techniques/T1195/"
+
+[[rule.threat.technique.subtechnique]]
+id = "T1195.002"
+name = "Compromise Software Supply Chain"
+reference = "https://attack.mitre.org/techniques/T1195/002/"
+
+[rule.threat.tactic]
+id = "TA0001"
+name = "Initial Access"
+reference = "https://attack.mitre.org/tactics/TA0001/"
